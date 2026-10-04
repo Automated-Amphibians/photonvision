@@ -26,6 +26,7 @@ import { useSettingsStore } from "@/stores/settings/GeneralSettingsStore";
 import { useTheme } from "vuetify";
 import TooltippedLabel from "@/components/common/pv-tooltipped-label.vue";
 import { length, type Length } from "@adam-rocska/units-and-measurement/length";
+import axios from "axios";
 
 const PromptRegular = import("@/assets/fonts/PromptRegular");
 const jspdf = import("jspdf").then(async (jspdf) => {
@@ -35,8 +36,94 @@ const jspdf = import("jspdf").then(async (jspdf) => {
 const arucoMarker = import("aruco-marker");
 
 const theme = useTheme();
+const session = computed(() => useStateStore().currentCalibrationSession);
+const snapshotCount = computed(() => session.value?.count ?? 0);
+const guidedCapture = ref(false);
+const pendingActions = ref(0);
+const actionBusy = computed(() => pendingActions.value > 0);
+const actionError = ref("");
+const showSnapshots = ref(false);
+const snapshotIndex = ref(0);
+const showReview = ref(false);
+const sessionVideoFormat = computed(() =>
+  useCameraSettingsStore().currentCameraSettings.validVideoFormats.find(
+    (format) => format.index === session.value?.videoModeIndex
+  )
+);
+const snapshotUrl = computed(() => {
+  const query = new URLSearchParams({
+    cameraUniqueName: useStateStore().currentCameraUniqueName,
+    sessionId: session.value?.sessionId ?? "",
+    snapshotIndex: String(snapshotIndex.value),
+    revision: `${snapshotCount.value}-${session.value?.captureSequence ?? 0}`
+  });
+  return `${axios.defaults.baseURL}/calibration/session/snapshot?${query}`;
+});
+
+const sessionAction = async (action: "pause" | "resume" | "snapshot" | "remove" | "solve" | "apply" | "cancel") => {
+  const camera = useStateStore().currentCameraUniqueName;
+  const sessionId = session.value?.sessionId;
+  pendingActions.value++;
+  actionError.value = "";
+  try {
+    const data = await useCameraSettingsStore().calibrationSessionAction(action, snapshotIndex.value);
+    if (camera !== useStateStore().currentCameraUniqueName || sessionId !== session.value?.sessionId) return;
+    snapshotIndex.value = Math.max(0, Math.min(snapshotIndex.value, data.count - 1));
+    if (action === "solve" && data.active) {
+      showReview.value = Boolean(data.pendingResult);
+      if (!data.pendingResult)
+        actionError.value = "Solve failed. Your snapshots were kept; add views at different positions and angles.";
+    }
+    if (action === "apply" || action === "cancel") {
+      showReview.value = false;
+      showSnapshots.value = false;
+    }
+  } catch (error) {
+    if (camera !== useStateStore().currentCameraUniqueName || sessionId !== session.value?.sessionId) return;
+    if (action === "solve" && !session.value?.active) return;
+    actionError.value =
+      axios.isAxiosError(error) && typeof error.response?.data === "string"
+        ? error.response.data
+        : "Could not update calibration. Check the connection and try again.";
+  } finally {
+    pendingActions.value--;
+  }
+};
+
+const reviewSnapshots = async () => {
+  await sessionAction("pause");
+  if (!actionError.value) showSnapshots.value = true;
+};
+
+watch(
+  () => [useStateStore().currentCameraUniqueName, useStateStore().backendConnected] as const,
+  ([camera, connected]) => {
+    showSnapshots.value = false;
+    showReview.value = false;
+    actionError.value = "";
+    if (connected && camera)
+      void useCameraSettingsStore()
+        .refreshCalibrationSession(camera)
+        .catch(() => {});
+  },
+  { immediate: true }
+);
+watch(
+  () => session.value?.sessionId,
+  () => {
+    snapshotIndex.value = 0;
+    showReview.value = false;
+    showSnapshots.value = false;
+  }
+);
 
 const settingsValid = ref(true);
+watch(
+  () => session.value?.pendingResult,
+  (result) => {
+    if (!result) showReview.value = false;
+  }
+);
 
 const getUniqueVideoFormatsByResolution = (): VideoFormat[] => {
   const uniqueResolutions: VideoFormat[] = [];
@@ -112,6 +199,11 @@ const uniqueVideoResolutionIndex = ref(getUniqueVideoResolutionStrings()?.[0]?.v
 // Use a watchEffect so the value is populated/reacts when the stores become available or update.
 // This avoids trying to index into an array that may be empty during page reload.
 watchEffect(() => {
+  if (session.value?.active) {
+    useStateStore().calibrationData.videoFormatIndex = session.value.videoModeIndex;
+    uniqueVideoResolutionIndex.value = session.value.videoModeIndex;
+    return;
+  }
   const names = useCameraSettingsStore().currentCameraSettings.validVideoFormats.map((f) =>
     getResolutionString(f.resolution)
   );
@@ -134,9 +226,24 @@ const patternHeight = ref(8);
 const boardType = ref<CalibrationBoardTypes>(CalibrationBoardTypes.ChArUco);
 const useOldPattern = ref(false);
 const tagFamily = ref<CalibrationTagFamilies>(CalibrationTagFamilies.Dict_4X4_1000);
-const requestedVideoFormatIndex = ref(0);
 const paperType = ref<CalibrationPaperTypes>(CalibrationPaperTypes.Letter);
 const paperOrientation = ref<"portrait" | "landscape">("portrait");
+
+watch(
+  () => session.value?.sessionId,
+  () => {
+    const current = session.value;
+    if (!current?.active) return;
+    squareSize.value = length.m(current.squareSizeMeters)[dimensionUnit.value].value;
+    markerSize.value = length.m(current.markerSizeMeters)[dimensionUnit.value].value;
+    patternWidth.value = current.patternWidth;
+    patternHeight.value = current.patternHeight;
+    boardType.value = current.boardType;
+    useOldPattern.value = current.useOldPattern;
+    tagFamily.value = current.tagFamily;
+  },
+  { immediate: true }
+);
 
 watch(dimensionUnit, (value, oldValue) => {
   squareSize.value = length[oldValue](squareSize.value)[value].value;
@@ -153,9 +260,7 @@ const adaptivePaperDimensions = (): [Length, Length] => {
 };
 
 // Emperical testing - with stack size limit of 1MB, we can handle at -least- 700k points
-const tooManyPoints = computed(
-  () => useStateStore().calibrationData.imageCount * patternWidth.value * patternHeight.value > 700000
-);
+const tooManyPoints = computed(() => snapshotCount.value * patternWidth.value * patternHeight.value > 700000);
 
 const downloadCalibBoard = async () => {
   const { jsPDF } = await jspdf;
@@ -283,53 +388,24 @@ const startCalibration = () => {
     patternWidth: patternWidth.value,
     boardType: boardType.value,
     useOldPattern: useOldPattern.value,
-    tagFamily: tagFamily.value
+    tagFamily: tagFamily.value,
+    guidedCapture: guidedCapture.value
   });
   // The Start PnP method already handles updating the backend so only a store update is required
   useCameraSettingsStore().currentCameraSettings.currentPipelineIndex = WebsocketPipelineType.Calib3d;
   // isCalibrating.value = true;
-  calibCanceled.value = false;
-  requestedVideoFormatIndex.value = useStateStore().calibrationData.videoFormatIndex;
-};
-const showCalibEndDialog = ref(false);
-const calibCanceled = ref(false);
-const calibSuccess = ref<boolean | undefined>(undefined);
-const calibEndpointFail = ref(false);
-const endCalibration = () => {
-  calibSuccess.value = undefined;
-  calibEndpointFail.value = false;
-
-  if (!hasEnoughImages.value) {
-    calibCanceled.value = true;
-  }
-
-  showCalibEndDialog.value = true;
-  // Check if calibration finished cleanly or was canceled
-  useCameraSettingsStore()
-    .endPnPCalibration(useStateStore().currentCameraUniqueName, !hasEnoughImages.value)
-    .then(() => {
-      calibSuccess.value = true;
-    })
-    .catch((e) => {
-      if (e.response) {
-        // Server returned a status code
-      } else if (e.request) {
-        // Something went wrong. Unsure if calibration actually worked
-        calibEndpointFail.value = true;
-      }
-      calibSuccess.value = false;
-    })
-    .finally(() => {
-      // isCalibrating.value = false;
-      // backend deals with this for us
-    });
+  actionError.value = "";
 };
 
 const drawAllSnapshots = ref(true);
 
 const bypassVal = ref(false);
-const minCount = computed(() => (bypassVal.value ? 10 : 100));
-const hasEnoughImages = computed(() => useStateStore().calibrationData.imageCount >= minCount.value);
+const minCount = computed(() => (session.value?.guidedCapture ? 30 : bypassVal.value ? 10 : 100));
+const hasEnoughImages = computed(() => snapshotCount.value >= minCount.value);
+const canTryCalibration = computed(
+  () =>
+    session.value?.canSolve && (session.value.guidedCapture || hasEnoughImages.value || session.value.storageLimited)
+);
 
 const showCalDialog = ref(false);
 const selectedVideoFormat = ref<VideoFormat | undefined>(undefined);
@@ -389,7 +465,7 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
         </v-table>
       </v-card-text>
       <v-card-text class="pt-0">
-        <div v-if="useCameraSettingsStore().isConnected" class="d-flex flex-column">
+        <div v-if="useCameraSettingsStore().isConnected && !isCalibrating" class="d-flex flex-column">
           <v-card-subtitle v-if="!isCalibrating" class="pl-0 pb-3 pt-4 opacity-100"
             >Configure New Calibration</v-card-subtitle
           >
@@ -545,6 +621,46 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
           </v-form>
         </div>
         <div v-if="isCalibrating">
+          <v-alert
+            class="mb-3"
+            variant="tonal"
+            :color="session?.recentlyCaptured ? 'success' : 'info'"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="calibration-instructions">
+              <strong class="calibration-guidance">{{ session?.guidance || session?.feedback }}</strong>
+              <div class="calibration-feedback">
+                {{
+                  session?.recentlyCaptured
+                    ? `Saved snapshot ${snapshotCount}`
+                    : session?.guidance !== session?.feedback
+                      ? session?.feedback
+                      : ""
+                }}
+              </div>
+            </div>
+          </v-alert>
+          <div v-if="session?.guidedCapture" class="mb-3">
+            <v-btn
+              :disabled="actionBusy || session.solving"
+              @click="sessionAction(session.capturePaused ? 'resume' : 'pause')"
+            >
+              {{ session.capturePaused ? "Resume auto-capture" : "Pause auto-capture" }}
+            </v-btn>
+          </div>
+          <p class="mb-2">Observation coverage: M = Missing, W = Weak (1–2 distinct views), S = Sampled (3+).</p>
+          <p class="mb-3">
+            {{ session?.distinctViews ?? 0 }} distinct views · {{ session?.scaleBands ?? 0 }} scale bands ·
+            {{ session?.tiltedViews ?? 0 }} tilted views
+          </p>
+          <v-alert v-if="session?.ready" class="mb-3" color="success" variant="tonal">
+            Ready to try calibration. Review the solve before applying it; observation coverage does not guarantee
+            accuracy.
+          </v-alert>
+          <v-btn class="mb-3" :disabled="!snapshotCount || actionBusy || session?.solving" @click="reviewSnapshots"
+            >Review / remove snapshots</v-btn
+          >
           <pv-switch
             v-model="drawAllSnapshots"
             label="Draw Collected Corners"
@@ -642,11 +758,12 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
             label
             :color="hasEnoughImages ? 'buttonPassive' : 'light-grey'"
           >
-            Snapshots: {{ useStateStore().calibrationData.imageCount }} of at least
+            Snapshots: {{ snapshotCount }} · Recommended:
             {{ minCount }}
           </v-chip>
           <v-spacer />
           <pv-switch
+            v-if="!session?.guidedCapture"
             v-model="bypassVal"
             color="error"
             hide-details
@@ -657,6 +774,25 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
             tooltip="Bypass the minimum recommended amount of snapshots for a calibration. Should only be used for dev work or temporary tests not competitions. Still requires 10 images to calibrate."
           />
         </div>
+        <template v-if="!isCalibrating">
+          <pv-switch
+            v-model="guidedCapture"
+            label="Guided auto-capture"
+            :switch-cols="8"
+            tooltip="Automatically save sharp, stable views that add observation coverage or diversity."
+          />
+          <p class="mb-3">
+            Print at 100% scale, measure the squares and markers, and mount the board on a flat, rigid backing.
+          </p>
+        </template>
+        <v-alert v-if="actionError" class="mb-3" color="error" variant="tonal" role="alert">{{ actionError }}</v-alert>
+        <v-alert v-if="session?.solving || actionBusy" class="mb-3" color="info" variant="tonal">
+          {{
+            session?.solving
+              ? "Solving calibration. Your saved calibration remains active until you apply this result."
+              : "Updating calibration…"
+          }}
+        </v-alert>
         <div>
           <v-btn
             color="buttonPassive"
@@ -686,8 +822,14 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
               block
               color="buttonActive"
               :variant="theme.global.current.value.dark ? 'outlined' : 'elevated'"
-              :disabled="!settingsValid || tooManyPoints"
-              @click="isCalibrating ? useCameraSettingsStore().takeCalibrationSnapshot() : startCalibration()"
+              :disabled="
+                !settingsValid ||
+                tooManyPoints ||
+                actionBusy ||
+                session?.solving ||
+                (isCalibrating && (!session?.active || session.storageLimited))
+              "
+              @click="isCalibrating ? sessionAction('snapshot') : startCalibration()"
             >
               <v-icon start class="calib-btn-icon" size="large">
                 {{ isCalibrating ? "mdi-camera" : "mdi-flag-outline" }}
@@ -700,64 +842,70 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
               size="small"
               block
               :variant="theme.global.current.value.dark ? 'outlined' : 'elevated'"
-              :color="hasEnoughImages ? 'buttonActive' : 'error'"
-              :disabled="!isCalibrating || !settingsValid"
-              @click="endCalibration"
+              color="buttonActive"
+              :disabled="!isCalibrating || !settingsValid || !canTryCalibration || actionBusy || session?.solving"
+              @click="sessionAction('solve')"
             >
-              <v-icon start class="calib-btn-icon" size="large">
-                {{ hasEnoughImages ? "mdi-flag-checkered" : "mdi-flag-off-outline" }}
-              </v-icon>
-              <span class="calib-btn-label">{{ hasEnoughImages ? "Finish Calibration" : "Cancel Calibration" }}</span>
+              <v-icon start class="calib-btn-icon" size="large"> mdi-flag-checkered </v-icon>
+              <span class="calib-btn-label">Try Calibration</span>
             </v-btn>
           </v-col>
         </div>
+        <div v-if="isCalibrating" class="d-flex ga-3 mt-3">
+          <v-btn
+            color="error"
+            :disabled="(actionBusy && !session?.solving) || !session?.active"
+            @click="sessionAction('cancel')"
+            >Cancel Calibration</v-btn
+          >
+          <v-btn v-if="session?.pendingResult" @click="showReview = true">Review Result</v-btn>
+        </div>
       </v-card-text>
     </v-card>
-    <v-dialog v-model="showCalibEndDialog" width="500px" :persistent="true">
-      <v-card color="surface" dark>
-        <v-card-title> Camera Calibration </v-card-title>
-        <div style="text-align: center">
-          <template v-if="calibCanceled">
-            <v-icon color="primary" size="70"> mdi-cancel </v-icon>
-            <v-card-text>
-              Camera calibration has been canceled. The backend is attempting to cleanly cancel the calibration process.
-            </v-card-text>
-          </template>
-          <!-- No result reported yet -->
-          <template v-else-if="calibSuccess === undefined">
-            <v-progress-circular indeterminate :size="70" :width="8" color="primary" />
-            <v-card-text>Camera is being calibrated. This process may take several minutes...</v-card-text>
-          </template>
-          <!-- Got positive result -->
-          <template v-else-if="calibSuccess">
-            <v-icon color="#00ff00" size="70"> mdi-check </v-icon>
-            <v-card-text>
-              Camera has been successfully calibrated for
-              {{
-                useCameraSettingsStore().currentCameraSettings.validVideoFormats.map((f) =>
-                  getResolutionString(f.resolution)
-                )[requestedVideoFormatIndex]
-              }}!
-            </v-card-text>
-          </template>
-          <template v-else-if="calibEndpointFail">
-            <v-icon color="gray" size="70"> mdi-help-circle-outline </v-icon>
-            <v-card-text
-              >Unable to determine if calibration was successful. Refresh this page and manually check if calibration
-              was successful.</v-card-text
-            >
-          </template>
-          <template v-else>
-            <v-icon color="red" size="70"> mdi-close </v-icon>
-            <v-card-text>
-              Camera calibration failed! Make sure that the photos are taken such that the rainbow grid circles align
-              with the corners of the chessboard, and try again. More information is available in the program logs.
-            </v-card-text>
-          </template>
-        </div>
-        <v-card-actions class="pa-5 pt-0">
+    <v-dialog v-model="showSnapshots" width="900px">
+      <v-card>
+        <v-card-title>Snapshot {{ snapshotIndex + 1 }} of {{ snapshotCount }}</v-card-title>
+        <v-card-text>
+          <v-img v-if="snapshotCount" :src="snapshotUrl" alt="Captured calibration board" max-height="550" />
+          <p v-else>No snapshots remain. Close this view and collect more observations.</p>
+          <p>Auto-capture is paused while reviewing. Resume it when ready to collect more views.</p>
+          <v-alert v-if="actionError" color="error">{{ actionError }}</v-alert>
+        </v-card-text>
+        <v-card-actions>
+          <v-btn :disabled="snapshotIndex === 0 || actionBusy" @click="snapshotIndex--">Previous</v-btn>
+          <v-btn :disabled="snapshotIndex >= snapshotCount - 1 || actionBusy" @click="snapshotIndex++">Next</v-btn>
+          <v-btn color="error" :disabled="!snapshotCount || actionBusy" @click="sessionAction('remove')"
+            >Remove Snapshot</v-btn
+          >
           <v-spacer />
-          <v-btn v-if="!isCalibrating" color="white" variant="text" @click="showCalibEndDialog = false"> OK </v-btn>
+          <v-btn @click="showSnapshots = false">Close</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+    <v-dialog v-model="showReview" width="80em">
+      <v-card v-if="session?.pendingResult && sessionVideoFormat">
+        <v-card-title>Review Calibration Result</v-card-title>
+        <v-card-text
+          >Check reprojection errors, observed corners, and projection uncertainty. Low error does not detect incorrect
+          board dimensions or a warped board.</v-card-text
+        >
+        <CameraCalibrationInfoCard
+          :video-format="sessionVideoFormat"
+          :calibration="session.pendingResult"
+          :session-id="session.sessionId"
+        />
+        <v-alert v-if="actionError" color="error">{{ actionError }}</v-alert>
+        <v-card-actions>
+          <v-btn
+            :disabled="actionBusy"
+            @click="
+              sessionAction('resume');
+              showReview = false;
+            "
+            >Collect More Views</v-btn
+          >
+          <v-spacer />
+          <v-btn color="buttonActive" :disabled="actionBusy" @click="sessionAction('apply')">Apply Calibration</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -768,6 +916,27 @@ const setSelectedVideoFormat = (format: VideoFormat) => {
 </template>
 
 <style scoped lang="scss">
+.calibration-instructions {
+  display: grid;
+  gap: 0.5em;
+  line-height: 1.5;
+}
+
+.calibration-guidance,
+.calibration-feedback {
+  display: block;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.calibration-guidance {
+  height: 3em;
+}
+
+.calibration-feedback {
+  height: 4.5em;
+}
+
 th {
   text-align: center !important;
   padding: 0 8px !important;

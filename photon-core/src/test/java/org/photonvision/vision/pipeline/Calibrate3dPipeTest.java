@@ -278,6 +278,7 @@ public class Calibrate3dPipeTest {
             calibration3dPipeline.getSettings().streamingFrameDivisor = FrameDivisor.NONE;
             calibration3dPipeline.getSettings().useMrCal = useMrCal;
             calibration3dPipeline.getSettings().useOldPattern = useOldPattern;
+            calibration3dPipeline.beginSession("Calibration_Test", false);
 
             for (var file : directoryListing) {
                 if (file.isFile()) {
@@ -313,6 +314,7 @@ public class Calibrate3dPipeTest {
                     calibration3dPipeline.tryCalibration(
                             ConfigManager.getInstance()
                                     .getCalibrationImageSavePathWithRes(imgRes, "Calibration_Test"));
+            if (cal != null) calibration3dPipeline.takePendingCalibration();
             calibration3dPipeline.finishCalibration();
         }
 

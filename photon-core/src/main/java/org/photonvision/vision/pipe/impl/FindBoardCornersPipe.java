@@ -73,6 +73,7 @@ public class FindBoardCornersPipe
 
     @Override
     public void setParams(FindCornersPipeParams params) {
+        if (params.equals(this.params)) return;
         super.setParams(params);
 
         objectPointsTemplate.ifPresent(
@@ -290,7 +291,7 @@ public class FindBoardCornersPipe
         final Mat outFrame = in.getSecond();
 
         // Convert the inFrame to grayscale to increase contrast
-        Imgproc.cvtColor(inFrame, inFrame, Imgproc.COLOR_BGR2GRAY);
+        if (inFrame.channels() != 1) Imgproc.cvtColor(inFrame, inFrame, Imgproc.COLOR_BGR2GRAY);
         boolean boardFound = false;
 
         // Get the size of the inFrame
@@ -429,7 +430,10 @@ public class FindBoardCornersPipe
                             + ", object points of size "
                             + objectPoints.size()
                             + ", and corner ids of size "
-                            + ids.size());
+                            + (ids == null ? "none" : ids.size()));
+            objectPoints.release();
+            imagePoints.release();
+            if (ids != null) ids.release();
             return null;
         }
 

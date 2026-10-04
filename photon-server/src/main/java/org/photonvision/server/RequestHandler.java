@@ -92,6 +92,60 @@ public class RequestHandler {
     @Json
     record CalibrationEndRequest(String cameraUniqueName, boolean cancel) {}
 
+    @Json
+    record CalibrationSessionRequest(
+            String cameraUniqueName, String sessionId, String action, int snapshotIndex) {}
+
+    public static void onCalibrationSessionState(Context ctx) {
+        var module =
+                VisionSourceManager.getInstance().vmm.getModule(ctx.queryParam("cameraUniqueName"));
+        if (module == null) {
+            ctx.status(404);
+            return;
+        }
+        ctx.json(module.calibrationSessionState());
+    }
+
+    public static void onCalibrationSessionAction(Context ctx) {
+        try {
+            var request = Jsonb.instance().type(CalibrationSessionRequest.class).fromJson(ctx.body());
+            var module = VisionSourceManager.getInstance().vmm.getModule(request.cameraUniqueName);
+            if (module == null) {
+                ctx.status(404);
+                return;
+            }
+            ctx.json(
+                    module.calibrationSessionAction(
+                            request.sessionId, request.action, request.snapshotIndex));
+        } catch (IllegalStateException e) {
+            ctx.status(409).result(e.getMessage());
+        } catch (IllegalArgumentException | JsonException e) {
+            ctx.status(400).result("Invalid calibration session request");
+        } catch (Exception e) {
+            logger.error("Calibration session action failed", e);
+            ctx.status(500).result("Calibration solve failed; keep the session and collect more views");
+        }
+    }
+
+    public static void onCalibrationSessionSnapshot(Context ctx) {
+        try {
+            var module =
+                    VisionSourceManager.getInstance().vmm.getModule(ctx.queryParam("cameraUniqueName"));
+            if (module == null) {
+                ctx.status(404);
+                return;
+            }
+            ctx.contentType("image/jpeg")
+                    .result(
+                            module.calibrationSessionSnapshot(
+                                    ctx.queryParam("sessionId"), Integer.parseInt(ctx.queryParam("snapshotIndex"))));
+        } catch (IllegalStateException e) {
+            ctx.status(409).result(e.getMessage());
+        } catch (IllegalArgumentException e) {
+            ctx.status(404);
+        }
+    }
+
     public static void onSettingsImportRequest(Context ctx) {
         var file = ctx.uploadedFile("data");
 
@@ -1054,13 +1108,15 @@ public class RequestHandler {
         }
 
         CameraCalibrationCoefficients calList =
-                module.getStateAsCameraConfig().calibrations.stream()
-                        .filter(
-                                it ->
-                                        Math.abs(it.resolution.width - width) < 1e-4
-                                                && Math.abs(it.resolution.height - height) < 1e-4)
-                        .findFirst()
-                        .orElse(null);
+                ctx.queryParam("sessionId") != null
+                        ? module.calibrationReviewResult(ctx.queryParam("sessionId"))
+                        : module.getStateAsCameraConfig().calibrations.stream()
+                                .filter(
+                                        it ->
+                                                Math.abs(it.resolution.width - width) < 1e-4
+                                                        && Math.abs(it.resolution.height - height) < 1e-4)
+                                .findFirst()
+                                .orElse(null);
 
         if (calList == null) {
             ctx.status(404);
@@ -1084,13 +1140,15 @@ public class RequestHandler {
         }
 
         CameraCalibrationCoefficients calList =
-                module.getStateAsCameraConfig().calibrations.stream()
-                        .filter(
-                                it ->
-                                        Math.abs(it.resolution.width - width) < 1e-4
-                                                && Math.abs(it.resolution.height - height) < 1e-4)
-                        .findFirst()
-                        .orElse(null);
+                ctx.queryParam("sessionId") != null
+                        ? module.calibrationReviewResult(ctx.queryParam("sessionId"))
+                        : module.getStateAsCameraConfig().calibrations.stream()
+                                .filter(
+                                        it ->
+                                                Math.abs(it.resolution.width - width) < 1e-4
+                                                        && Math.abs(it.resolution.height - height) < 1e-4)
+                                .findFirst()
+                                .orElse(null);
 
         if (calList == null) {
             ctx.status(404);
@@ -1163,21 +1221,23 @@ public class RequestHandler {
         var height = Integer.parseInt(ctx.queryParam("height"));
         Integer observationIdx = Integer.parseInt(ctx.queryParam("snapshotIdx"));
 
+        var module = VisionSourceManager.getInstance().vmm.getModule(cameraUniqueName);
+        if (module == null) {
+            ctx.status(404);
+            return;
+        }
         CameraCalibrationCoefficients calList =
-                VisionSourceManager.getInstance()
-                        .vmm
-                        .getModule(cameraUniqueName)
-                        .getStateAsCameraConfig()
-                        .calibrations
-                        .stream()
-                        .filter(
-                                it ->
-                                        Math.abs(it.resolution.width - width) < 1e-4
-                                                && Math.abs(it.resolution.height - height) < 1e-4)
-                        .findFirst()
-                        .orElse(null);
+                ctx.queryParam("sessionId") != null
+                        ? module.calibrationReviewResult(ctx.queryParam("sessionId"))
+                        : module.getStateAsCameraConfig().calibrations.stream()
+                                .filter(
+                                        it ->
+                                                Math.abs(it.resolution.width - width) < 1e-4
+                                                        && Math.abs(it.resolution.height - height) < 1e-4)
+                                .findFirst()
+                                .orElse(null);
 
-        if (calList == null || calList.observations.size() < observationIdx) {
+        if (calList == null || observationIdx < 0 || calList.observations.size() <= observationIdx) {
             ctx.status(404);
             return;
         }

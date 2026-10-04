@@ -41,6 +41,7 @@ interface StateStore {
     imageCount: number;
     videoFormatIndex: number;
   };
+  calibrationSessions: Record<string, WebsocketCalibrationData>;
 
   snackbarData: {
     show: boolean;
@@ -89,6 +90,7 @@ export const useStateStore = defineStore("state", {
         imageCount: 0,
         videoFormatIndex: 0
       },
+      calibrationSessions: {},
 
       snackbarData: {
         show: false,
@@ -106,6 +108,9 @@ export const useStateStore = defineStore("state", {
     };
   },
   getters: {
+    currentCalibrationSession(): WebsocketCalibrationData | undefined {
+      return this.calibrationSessions[this.currentCameraUniqueName];
+    },
     currentPipelineResults(): PipelineResult | undefined {
       return this.backendResults[this.currentCameraUniqueName.toString()];
     },
@@ -156,10 +161,12 @@ export const useStateStore = defineStore("state", {
       }
     },
     updateCalibrationStateValuesFromWebsocket(data: WebsocketCalibrationData) {
-      this.calibrationData = {
-        imageCount: data.count,
-        videoFormatIndex: data.videoModeIndex
-      };
+      if (!data.cameraUniqueName) return;
+      this.calibrationSessions[data.cameraUniqueName] = data;
+      if (data.cameraUniqueName === this.currentCameraUniqueName) {
+        this.calibrationData.imageCount = data.count;
+        if (data.active) this.calibrationData.videoFormatIndex = data.videoModeIndex;
+      }
     },
     updateDiscoveredCameras(data: VsmState) {
       this.vsmState = data;

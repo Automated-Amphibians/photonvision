@@ -11,7 +11,7 @@ import type {
 } from "@/types/SettingTypes";
 import { PlaceholderCameraSettings } from "@/types/SettingTypes";
 import { useStateStore } from "@/stores/StateStore";
-import type { WebsocketCameraSettingsUpdate } from "@/types/WebsocketDataTypes";
+import type { WebsocketCameraSettingsUpdate, WebsocketCalibrationData } from "@/types/WebsocketDataTypes";
 import { WebsocketPipelineType } from "@/types/WebsocketDataTypes";
 import type { ActiveConfigurablePipelineSettings, ActivePipelineSettings, PipelineType } from "@/types/PipelineTypes";
 import axios from "axios";
@@ -375,6 +375,7 @@ export const useCameraSettingsStore = defineStore("cameraSettings", {
         boardType: CalibrationBoardTypes;
         useOldPattern: boolean;
         tagFamily: CalibrationTagFamilies;
+        guidedCapture: boolean;
       },
       cameraUniqueName: string = useStateStore().currentCameraUniqueName
     ) {
@@ -397,6 +398,31 @@ export const useCameraSettingsStore = defineStore("cameraSettings", {
      */
     endPnPCalibration(cameraUniqueName: string = useStateStore().currentCameraUniqueName, cancel: boolean = false) {
       return axios.post("/calibration/end", { cameraUniqueName: cameraUniqueName, cancel: cancel });
+    },
+
+    async refreshCalibrationSession(cameraUniqueName: string = useStateStore().currentCameraUniqueName) {
+      const response = await axios.get<WebsocketCalibrationData>("/calibration/session", {
+        params: { cameraUniqueName }
+      });
+      useStateStore().updateCalibrationStateValuesFromWebsocket(response.data);
+    },
+
+    async calibrationSessionAction(
+      action: "pause" | "resume" | "snapshot" | "remove" | "solve" | "apply" | "cancel",
+      snapshotIndex = 0,
+      cameraUniqueName: string = useStateStore().currentCameraUniqueName,
+      sessionId: string = useStateStore().calibrationSessions[cameraUniqueName]?.sessionId ?? ""
+    ) {
+      const response = await axios.post<WebsocketCalibrationData>("/calibration/session", {
+        cameraUniqueName,
+        sessionId,
+        action,
+        snapshotIndex
+      });
+      const current = useStateStore().calibrationSessions[cameraUniqueName];
+      if (!current || current.sessionId === sessionId || current.sessionId === response.data.sessionId)
+        useStateStore().updateCalibrationStateValuesFromWebsocket(response.data);
+      return response.data;
     },
 
     importCalibrationFromData(

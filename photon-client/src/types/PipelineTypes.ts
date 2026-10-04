@@ -374,6 +374,9 @@ export const DefaultObjectDetectionPipelineSettings: ObjectDetectionPipelineSett
 export interface Calibration3dPipelineSettings extends PipelineSettings {
   pipelineType: PipelineType.Calibration3d;
   drawAllSnapshots: boolean;
+  guidedCapture: boolean;
+  capturePaused: boolean;
+  drawObservationCoverage: boolean;
 }
 export type ConfigurableCalibration3dPipelineSettings = Partial<Omit<Calibration3dPipelineSettings, "pipelineType">> &
   ConfigurablePipelineSettings;
@@ -385,7 +388,10 @@ export const DefaultCalibration3dPipelineSettings: Calibration3dPipelineSettings
   ledMode: true,
   outputMaximumTargets: 1,
   cameraExposureRaw: 6,
-  drawAllSnapshots: false
+  drawAllSnapshots: false,
+  guidedCapture: false,
+  capturePaused: false,
+  drawObservationCoverage: true
 };
 
 export type ActivePipelineSettings =

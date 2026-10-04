@@ -26,7 +26,7 @@ Accurate camera calibration is required in order to get accurate pose measuremen
 02. Use as big of a calibration target as your printer can print.
 03. Ensure that your printed pattern has enough white border around it.
 04. Ensure your camera stays in one position during the duration of the calibration.
-05. Make sure you get all 12 images from varying distances and angles.
+05. Collect views from varying distances and angles. The manual workflow recommends 100 snapshots; guided capture also checks observation coverage and diversity.
 06. Take at least one image that covers the total image area, and generally ensure that you get even coverage of the lens with your image set.
 07. Have good lighting, having a diffusely lit target would be best (light specifically shining on the target without shadows).
 08. Ensure the calibration target is completely flat and does not bend or fold in any way. It should be mounted/taped down to something flat and then used for calibration, do not just hold it up.
@@ -59,9 +59,54 @@ We'll next select a resolution to calibrate and populate our pattern spacing, ma
 If you have a [calib.io](https://calib.io/) ChArUco Target you will have to enter the paramaters of your target. For example if your target says "9x12 | Checker Size: 30 mm | Marker Size: 22 mm | Dictionary: ArUco DICT 5x5", you would have to set the board type to Dict_5x5_1000, the pattern spacing to 1.1811 in (30 mm converted to inches), the marker size 0.866142 in (22 mm converted to inches), the board width to 12 and the board height to 9. If you chose the wrong tag family the board wont be detected during calibration. If you swap the width and height your calibration will have a very high error.
 :::
 
-### 4. Take at calibration images from various angles.
+### 4. Collect calibration images from various angles.
 
-Now, we'll capture images of our board from various angles. It's important to check that the board overlay matches the board in your image. The further the overdrawn points are from the true position of the chessboard corners, the less accurate the final calibration will be. We'll want to capture enough images to cover the whole camera's FOV (with a minimum of 12). Once we've got our images, we'll click "Finish calibration" and wait for the calibration process to complete. If all goes well, the mean error and FOVs will be shown in the table on the right. The FOV should be close to the camera's specified FOV (usually found in a datasheet) usually within + or - 10 degrees. The mean error should also be low, usually less than 1 pixel.
+You can enable **Guided auto-capture** before starting calibration. Hold your
+rigidly mounted board in front of the camera and move it around the field of view.
+Follow one movement prompt at a time, changing distance and tilting the board in
+different directions. Briefly hold each view still. PhotonVision saves a view when
+the detected corners are sufficiently large, sharp, stable, and different from
+previous observations. A green **Saved snapshot** confirmation appears when a
+view is accepted. Keeping the board stationary does not collect duplicate views.
+
+The preview grid is labeled **Observation coverage**. **M** means missing, **W**
+means weak (one or two distinct views), and **S** means sampled (three or more
+distinct views). Only cells containing observed corners receive contributions;
+the area inside the board outline does not count as observed. Scale and tilt
+diversity are tracked separately. This is a sampling heuristic, not calibrated
+uncertainty or a predicted pose accuracy.
+
+Use **Pause auto-capture** and **Resume auto-capture** to control collection.
+**Take Snapshot** remains available while paused, or you can leave guided mode
+off and collect manually. **Review / remove snapshots** pauses collection and
+lets you inspect detected corners and remove unwanted views. Removing a view
+updates coverage and readiness. Print without scaling, measure the actual board
+dimensions, and use a flat, rigid backing: capture selection cannot correct
+incorrect measurements or board warping.
+
+**Ready to try calibration** means the guided dataset contains at least 30
+distinct views, broad observation coverage, multiple scales, and varied tilts.
+These initial criteria are heuristics awaiting validation across cameras and
+lighting conditions. Guided mode allows a solve once ten snapshots exist. Manual
+collection continues to recommend 100 snapshots, with **Bypass minimum** available
+for development or temporary tests after ten snapshots. Both modes have storage
+limits; if a limit is reached, remove unwanted views or try a solve with the current
+set of at least ten snapshots.
+Keep manual fallback available when guided selection is too restrictive.
+
+Check that the detected corners line up with the board before solving. Click
+**Try Calibration** and inspect the result's reprojection errors, observations,
+and projection uncertainty. Check that the FOV is reasonable for your camera and
+resolution. Low fitting error alone does not establish accuracy: incorrect board
+dimensions, a warped board, or an unsuitable lens model can still give a weak
+result. **Collect More Views** returns to the same dataset for additional capture.
+A failed solve keeps your snapshots, and **Cancel Calibration** leaves the saved
+calibration intact. Only **Apply Calibration** replaces the saved calibration.
+
+Repeat calibration for each physical camera and operating resolution. Disconnecting
+the camera or changing the board/resolution ends or resets its capture dataset.
+Guided capture is opt-in while recorded-session and coprocessor performance
+validation is underway.
 
 ```{raw} html
 <video width="85%" controls>

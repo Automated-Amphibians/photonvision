@@ -82,13 +82,34 @@ export type WebsocketPipelineResultUpdate = Record<string, PipelineResult>;
 export interface WebsocketCalibrationData {
   patternWidth: number;
   boardType: number;
-  hasEnough: boolean;
   count: number;
-  minCount: number;
   videoModeIndex: number;
   patternHeight: number;
-  squareSizeMm: number;
-  markerSizeMm: number;
+  squareSizeMeters: number;
+  markerSizeMeters: number;
+  useOldPattern: boolean;
+  tagFamily: number;
+  cameraUniqueName: string;
+  sessionId: string;
+  active: boolean;
+  guidedCapture: boolean;
+  capturePaused: boolean;
+  solving: boolean;
+  coverageColumns: number;
+  coverageRows: number;
+  coverage: number[];
+  distinctViews: number;
+  scaleBands: number;
+  tiltedViews: number;
+  ready: boolean;
+  canSolve: boolean;
+  snapshotLimit: number;
+  storageLimited: boolean;
+  captureSequence: number;
+  recentlyCaptured: boolean;
+  feedback: string;
+  guidance: string;
+  pendingResult: CameraCalibrationResult | null;
 }
 
 export interface IncomingWebsocketData {

@@ -19,6 +19,7 @@ package org.photonvision.vision.pipeline;
 
 import io.avaje.jsonb.Json;
 import org.opencv.objdetect.Objdetect;
+import org.photonvision.vision.calibration.UICameraCalibrationCoefficients;
 
 @Json
 public class UICalibrationData {
@@ -31,6 +32,27 @@ public class UICalibrationData {
     public double markerSizeMeters;
     public boolean useOldPattern;
     public TagFamily tagFamily;
+    public String cameraUniqueName;
+    public String sessionId;
+    public boolean active;
+    public boolean guidedCapture;
+    public boolean capturePaused;
+    public boolean solving;
+    public int coverageColumns;
+    public int coverageRows;
+    public int[] coverage;
+    public int distinctViews;
+    public int scaleBands;
+    public int tiltedViews;
+    public boolean ready;
+    public boolean canSolve;
+    public int snapshotLimit;
+    public boolean storageLimited;
+    public long captureSequence;
+    public boolean recentlyCaptured;
+    public String feedback;
+    public String guidance;
+    public UICameraCalibrationCoefficients pendingResult;
 
     public UICalibrationData() {}
 

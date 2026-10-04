@@ -375,40 +375,45 @@ public class VisionModule implements AutoCloseable {
     }
 
     public void startCalibration(UICalibrationData data) {
-        var settings = pipelineManager.calibration3dPipeline.getSettings();
+        synchronized (pipelineManager.calibration3dPipeline) {
+            pipelineManager.calibration3dPipeline.requireCanStartSession();
+            var settings = pipelineManager.calibration3dPipeline.getSettings();
 
-        var videoMode = visionSource.getSettables().getAllVideoModes().get(data.videoModeIndex);
-        var resolution = new Size(videoMode.width, videoMode.height);
+            var videoMode = visionSource.getSettables().getAllVideoModes().get(data.videoModeIndex);
+            var resolution = new Size(videoMode.width, videoMode.height);
 
-        settings.cameraVideoModeIndex = data.videoModeIndex;
-        visionSource.getSettables().setVideoModeIndex(data.videoModeIndex);
-        logger.info(
-                "Starting calibration at resolution index "
-                        + data.videoModeIndex
-                        + " and settings "
-                        + data);
-        settings.gridSize = data.squareSizeMeters;
-        settings.markerSize = data.markerSizeMeters;
-        settings.boardHeight = data.patternHeight;
-        settings.boardWidth = data.patternWidth;
-        settings.boardType = data.boardType;
-        settings.resolution = resolution;
-        settings.useOldPattern = data.useOldPattern;
-        settings.tagFamily = data.tagFamily;
+            settings.cameraVideoModeIndex = data.videoModeIndex;
+            visionSource.getSettables().setVideoModeIndex(data.videoModeIndex);
+            logger.info(
+                    "Starting calibration at resolution index "
+                            + data.videoModeIndex
+                            + " and settings "
+                            + data);
+            settings.gridSize = data.squareSizeMeters;
+            settings.markerSize = data.markerSizeMeters;
+            settings.boardHeight = data.patternHeight;
+            settings.boardWidth = data.patternWidth;
+            settings.boardType = data.boardType;
+            settings.resolution = resolution;
+            settings.useOldPattern = data.useOldPattern;
+            settings.tagFamily = data.tagFamily;
 
-        // Disable gain if not applicable
-        if (!cameraQuirks.hasQuirk(CameraQuirk.Gain)) {
-            settings.cameraGain = -1;
+            // Disable gain if not applicable
+            if (!cameraQuirks.hasQuirk(CameraQuirk.Gain)) {
+                settings.cameraGain = -1;
+            }
+            if (!cameraQuirks.hasQuirk(CameraQuirk.AwbRedBlueGain)) {
+                settings.cameraRedGain = -1;
+                settings.cameraBlueGain = -1;
+            }
+
+            settings.cameraAutoExposure = true;
+
+            pipelineManager.calibration3dPipeline.beginSession(
+                    visionSource.getCameraConfiguration().uniqueName, data.guidedCapture);
+            setPipeline(PipelineManager.CAL_3D_INDEX);
+            pipelineManager.calibration3dPipeline.broadcastState();
         }
-        if (!cameraQuirks.hasQuirk(CameraQuirk.AwbRedBlueGain)) {
-            settings.cameraRedGain = -1;
-            settings.cameraBlueGain = -1;
-        }
-
-        settings.cameraAutoExposure = true;
-
-        setPipeline(PipelineManager.CAL_3D_INDEX);
-        pipelineManager.calibration3dPipeline.broadcastState();
     }
 
     public void saveInputSnapshot() {
@@ -424,14 +429,12 @@ public class VisionModule implements AutoCloseable {
     }
 
     public CameraCalibrationCoefficients endCalibration(boolean cancel) {
-        CameraCalibrationCoefficients ret = null;
         if (!cancel) {
-            ret =
-                    pipelineManager.calibration3dPipeline.tryCalibration(
-                            ConfigManager.getInstance()
-                                    .getCalibrationImageSavePathWithRes(
-                                            pipelineManager.calibration3dPipeline.getSettings().resolution,
-                                            visionSource.getCameraConfiguration().uniqueName));
+            return pipelineManager.calibration3dPipeline.tryCalibration(
+                    ConfigManager.getInstance()
+                            .getCalibrationImageSavePathWithRes(
+                                    pipelineManager.calibration3dPipeline.getSettings().resolution,
+                                    visionSource.getCameraConfiguration().uniqueName));
         } else {
             logger.info("Calibration canceled -- not computing or saving a result");
         }
@@ -439,14 +442,71 @@ public class VisionModule implements AutoCloseable {
 
         setPipeline(pipelineManager.getRequestedIndex());
 
-        if (ret != null) {
-            logger.debug("Saving calibration...");
-            visionSource.getSettables().addCalibration(ret);
-        } else if (!cancel) {
-            logger.error("Calibration failed...");
-        }
         saveAndBroadcastAll();
-        return ret;
+        return null;
+    }
+
+    public UICalibrationData calibrationSessionAction(String sessionId, String action, int index) {
+        if (action == null) throw new IllegalArgumentException("A calibration action is required");
+        var pipeline = pipelineManager.calibration3dPipeline;
+        if ("solve".equals(action)) {
+            pipeline.tryCalibration(
+                    ConfigManager.getInstance()
+                            .getCalibrationImageSavePathWithRes(
+                                    pipeline.getSettings().resolution,
+                                    visionSource.getCameraConfiguration().uniqueName),
+                    sessionId);
+            return pipeline.uiState();
+        }
+        synchronized (pipeline) {
+            pipeline.requireSession(sessionId);
+            if (!visionSource.getFrameProvider().isConnected() && !"cancel".equals(action)) {
+                throw new IllegalStateException(
+                        "Camera disconnected; start a new session after reconnecting");
+            }
+            switch (action) {
+                case "pause" -> pipeline.setPaused(true);
+                case "resume" -> pipeline.setPaused(false);
+                case "snapshot" -> pipeline.takeSnapshot();
+                case "remove" -> {
+                    if (!pipeline.removeSnapshot(index))
+                        throw new IllegalStateException("Snapshot cannot be removed");
+                }
+                case "cancel" -> endCalibration(true);
+                case "apply" -> {
+                    visionSource.getSettables().addCalibration(pipeline.takePendingCalibration());
+                    pipelineManager.setCalibrationMode(false);
+                    setPipeline(pipelineManager.getRequestedIndex());
+                    saveAndBroadcastAll();
+                }
+                default -> throw new IllegalArgumentException("Unknown calibration action");
+            }
+            return pipeline.uiState();
+        }
+    }
+
+    public UICalibrationData calibrationSessionState() {
+        var state = pipelineManager.calibration3dPipeline.uiState();
+        state.cameraUniqueName = visionSource.getCameraConfiguration().uniqueName;
+        return state;
+    }
+
+    public byte[] calibrationSessionSnapshot(String sessionId, int index) {
+        var pipeline = pipelineManager.calibration3dPipeline;
+        synchronized (pipeline) {
+            pipeline.requireSession(sessionId);
+            return pipeline.snapshotImage(index);
+        }
+    }
+
+    public CameraCalibrationCoefficients calibrationReviewResult(String sessionId) {
+        var pipeline = pipelineManager.calibration3dPipeline;
+        synchronized (pipeline) {
+            pipeline.requireSession(sessionId);
+            var pending = pipeline.pendingCalibration();
+            if (pending == null) throw new IllegalStateException("No pending calibration result");
+            return pending;
+        }
     }
 
     boolean setPipeline(int index) {
@@ -684,6 +744,10 @@ public class VisionModule implements AutoCloseable {
     }
 
     private void consumeResult(CVPipelineResult result) {
+        if (!visionSource.getFrameProvider().isConnected()
+                && pipelineManager.getRequestedIndex() == PipelineManager.CAL_3D_INDEX) {
+            endCalibration(true);
+        }
         consumePipelineResult(result);
 
         // Pipelines like DriverMode and Calibrate3dPipeline have null output frames

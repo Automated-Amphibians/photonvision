@@ -12,6 +12,8 @@ import PhotonUncertaintyVisualizer from "@/components/app/photon-uncertainty-vis
 const theme = useTheme();
 const props = defineProps<{
   videoFormat: VideoFormat;
+  calibration?: CameraCalibrationResult;
+  sessionId?: string;
 }>();
 
 const confirmRemoveDialog = ref({ show: false, vf: props.videoFormat });
@@ -86,9 +88,25 @@ interface ObservationDetails {
   numMissing: number;
 }
 
-const currentCalibrationCoeffs = computed<CameraCalibrationResult | undefined>(() =>
-  useCameraSettingsStore().getCalibrationCoeffs(props.videoFormat.resolution)
+const currentCalibrationCoeffs = computed<CameraCalibrationResult | undefined>(
+  () => props.calibration ?? useCameraSettingsStore().getCalibrationCoeffs(props.videoFormat.resolution)
 );
+
+const calibrationSummary = computed(() => {
+  const coefficients = currentCalibrationCoeffs.value;
+  if (!coefficients) return undefined;
+  const fx = coefficients.cameraIntrinsics.data[0];
+  const fy = coefficients.cameraIntrinsics.data[4];
+  const { width, height } = props.videoFormat.resolution;
+  return {
+    mean: coefficients.meanErrors.length
+      ? coefficients.meanErrors.reduce((sum, error) => sum + error, 0) / coefficients.meanErrors.length
+      : NaN,
+    horizontalFOV: 2 * Math.atan2(width / 2, fx) * (180 / Math.PI),
+    verticalFOV: 2 * Math.atan2(height / 2, fy) * (180 / Math.PI),
+    diagonalFOV: 2 * Math.atan2(Math.sqrt(width ** 2 + (height / (fy / fx)) ** 2) / 2, fx) * (180 / Math.PI)
+  };
+});
 
 const getObservationDetails = (): ObservationDetails[] | undefined => {
   const coefficients = currentCalibrationCoeffs.value;
@@ -105,7 +123,11 @@ const exportCalibrationURL = computed<string>(() =>
   useCameraSettingsStore().getCalJSONUrl(inject("backendHost") as string, props.videoFormat.resolution)
 );
 const calibrationImageURL = (index: number) =>
-  useCameraSettingsStore().getCalImageUrl(inject<string>("backendHost") as string, props.videoFormat.resolution, index);
+  useCameraSettingsStore().getCalImageUrl(
+    inject<string>("backendHost") as string,
+    props.videoFormat.resolution,
+    index
+  ) + (props.sessionId ? `&sessionId=${encodeURIComponent(props.sessionId)}` : "");
 
 const tab = ref("details");
 const viewingImg = ref(0);
@@ -118,7 +140,7 @@ const viewingImg = ref(0);
         <v-col cols="12" md="6" class="pa-0">
           <v-card-title class="pa-0"> Calibration Details </v-card-title>
         </v-col>
-        <v-col cols="6" md="3" class="d-flex align-center pt-0 pb-0 pl-0">
+        <v-col v-if="!sessionId" cols="6" md="3" class="d-flex align-center pt-0 pb-0 pl-0">
           <v-btn
             color="buttonPassive"
             style="width: 100%"
@@ -136,7 +158,7 @@ const viewingImg = ref(0);
             @change="importCalibration"
           />
         </v-col>
-        <v-col cols="6" md="3" class="d-flex align-center pt-0 pb-0 pr-0">
+        <v-col v-if="!sessionId" cols="6" md="3" class="d-flex align-center pt-0 pb-0 pr-0">
           <v-btn
             color="buttonPassive"
             :disabled="!currentCalibrationCoeffs"
@@ -184,86 +206,60 @@ const viewingImg = ref(0);
                   <tr>
                     <td>Fx</td>
                     <td>
-                      {{
-                        useCameraSettingsStore()
-                          .getCalibrationCoeffs(props.videoFormat.resolution)
-                          ?.cameraIntrinsics.data[0].toFixed(2) || 0.0
-                      }}
+                      {{ currentCalibrationCoeffs?.cameraIntrinsics.data[0].toFixed(2) || 0.0 }}
                       px
                     </td>
                   </tr>
                   <tr>
                     <td>Fy</td>
                     <td>
-                      {{
-                        useCameraSettingsStore()
-                          .getCalibrationCoeffs(props.videoFormat.resolution)
-                          ?.cameraIntrinsics.data[4].toFixed(2) || 0.0
-                      }}
+                      {{ currentCalibrationCoeffs?.cameraIntrinsics.data[4].toFixed(2) || 0.0 }}
                       px
                     </td>
                   </tr>
                   <tr>
                     <td>Cx</td>
                     <td>
-                      {{
-                        useCameraSettingsStore()
-                          .getCalibrationCoeffs(props.videoFormat.resolution)
-                          ?.cameraIntrinsics.data[2].toFixed(2) || 0.0
-                      }}
+                      {{ currentCalibrationCoeffs?.cameraIntrinsics.data[2].toFixed(2) || 0.0 }}
                       px
                     </td>
                   </tr>
                   <tr>
                     <td>Cy</td>
                     <td>
-                      {{
-                        useCameraSettingsStore()
-                          .getCalibrationCoeffs(props.videoFormat.resolution)
-                          ?.cameraIntrinsics.data[5].toFixed(2) || 0.0
-                      }}
+                      {{ currentCalibrationCoeffs?.cameraIntrinsics.data[5].toFixed(2) || 0.0 }}
                       px
                     </td>
                   </tr>
                   <tr>
                     <td>Distortion</td>
                     <td>
-                      {{
-                        useCameraSettingsStore()
-                          .getCalibrationCoeffs(props.videoFormat.resolution)
-                          ?.distCoeffs.data.map((it) => parseFloat(it.toFixed(3))) || []
-                      }}
+                      {{ currentCalibrationCoeffs?.distCoeffs.data.map((it) => parseFloat(it.toFixed(3))) || [] }}
                     </td>
                   </tr>
                   <tr>
                     <td>Mean Err</td>
                     <td>
                       {{
-                        videoFormat.mean !== undefined
-                          ? isNaN(videoFormat.mean)
+                        calibrationSummary?.mean !== undefined
+                          ? isNaN(calibrationSummary.mean)
                             ? "NaN"
-                            : videoFormat.mean.toFixed(2) + "px"
+                            : calibrationSummary.mean.toFixed(2) + "px"
                           : "-"
                       }}
                     </td>
                   </tr>
                   <tr>
                     <td>Horizontal FOV</td>
-                    <td>
-                      {{ videoFormat.horizontalFOV !== undefined ? videoFormat.horizontalFOV.toFixed(2) + "°" : "-" }}
-                    </td>
+                    <td>{{ calibrationSummary?.horizontalFOV.toFixed(2) ?? "-" }}°</td>
                   </tr>
                   <tr>
                     <td>Vertical FOV</td>
-                    <td>
-                      {{ videoFormat.verticalFOV !== undefined ? videoFormat.verticalFOV.toFixed(2) + "°" : "-" }}
-                    </td>
+                    <td>{{ calibrationSummary?.verticalFOV.toFixed(2) ?? "-" }}°</td>
                   </tr>
                   <tr>
                     <td>Diagonal FOV</td>
-                    <td>
-                      {{ videoFormat.diagonalFOV !== undefined ? videoFormat.diagonalFOV.toFixed(2) + "°" : "-" }}
-                    </td>
+                    <td>{{ calibrationSummary?.diagonalFOV.toFixed(2) ?? "-" }}°</td>
                   </tr>
                   <!-- Board warp, only shown for mrcal-calibrated cameras -->
                   <tr v-if="currentCalibrationCoeffs?.calobjectWarp?.length === 2">
@@ -345,6 +341,7 @@ const viewingImg = ref(0);
             <PhotonCalibrationVisualizer
               :camera-unique-name="useCameraSettingsStore().currentCameraSettings.uniqueName"
               :resolution="props.videoFormat.resolution"
+              :session-id="sessionId"
               title="Camera to Board Transforms"
             />
             <template #fallback>Loading...</template>
@@ -354,6 +351,7 @@ const viewingImg = ref(0);
             v-else-if="tab === 'uncertainty'"
             :camera-unique-name="useCameraSettingsStore().currentCameraSettings.uniqueName"
             :resolution="props.videoFormat.resolution"
+            :session-id="sessionId"
             title="Camera reprojection uncertainty"
           />
           <!-- <template #fallback>Loading...</template> -->

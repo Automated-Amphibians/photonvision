@@ -191,6 +191,9 @@ public class PipelineManager implements AutoCloseable {
      * @param newIndex Index of pipeline to be active
      */
     private void setPipelineInternal(int newIndex) {
+        if (requestedIndex == CAL_3D_INDEX && newIndex != CAL_3D_INDEX) {
+            calibration3dPipeline.finishCalibration();
+        }
         requestedIndex = newIndex;
     }
 

@@ -33,6 +33,9 @@ public class Calibration3dPipelineSettings extends AdvancedPipelineSettings {
     public boolean useMrCal = true;
     public boolean useOldPattern = false;
     public boolean drawAllSnapshots;
+    public boolean guidedCapture = false;
+    public boolean capturePaused = false;
+    public boolean drawObservationCoverage = true;
 
     public Calibration3dPipelineSettings() {
         super();

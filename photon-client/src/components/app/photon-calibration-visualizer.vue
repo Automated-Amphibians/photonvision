@@ -37,6 +37,7 @@ const props = defineProps<{
   cameraUniqueName: string;
   resolution: { width: number; height: number };
   title: string;
+  sessionId?: string;
 }>();
 
 let scene: SceneType | undefined;
@@ -131,7 +132,8 @@ const fetchCalibrationData = async () => {
       params: {
         cameraUniqueName: props.cameraUniqueName,
         width: props.resolution.width,
-        height: props.resolution.height
+        height: props.resolution.height,
+        sessionId: props.sessionId
       }
     });
     calibrationData.value = response.data;

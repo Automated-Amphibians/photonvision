@@ -11,6 +11,7 @@ const props = defineProps<{
   cameraUniqueName: string;
   resolution: { width: number; height: number };
   title: string;
+  sessionId?: string;
 }>();
 
 const uncertaintyData: Ref<CvPoint3[] | null> = ref(null);
@@ -182,7 +183,8 @@ const fetchUncertaintyData = async () => {
       params: {
         cameraUniqueName: props.cameraUniqueName,
         width: props.resolution.width,
-        height: props.resolution.height
+        height: props.resolution.height,
+        sessionId: props.sessionId
       }
     });
     uncertaintyData.value = response.data;
